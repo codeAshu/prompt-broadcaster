@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Prompt Broadcaster",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Broadcast prompts to ChatGPT, Gemini, and Claude with AI-powered improvement and memory",
   "permissions": [
     "storage",
     "tabs",
-    "activeTab"
+    "activeTab",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -18,6 +19,9 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
   },
   "content_scripts": [
     {
@@ -37,12 +41,28 @@
     }
   ],
   "action": {
-    "default_popup": "popup/popup.html",
+    "default_title": "Open Prompt Broadcaster",
     "default_icon": {
       "128": "icons/icon128.png"
     }
   },
   "icons": {
     "128": "icons/icon128.png"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+B",
+        "mac": "Command+Shift+B"
+      },
+      "description": "Open Prompt Broadcaster"
+    },
+    "open_side_panel": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+P",
+        "mac": "Command+Shift+P"
+      },
+      "description": "Open Side Panel"
+    }
   }
 }

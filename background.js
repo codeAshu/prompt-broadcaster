@@ -29,26 +29,39 @@ async function initialize() {
     });
   } catch (error) {
     console.error('Prompt Broadcaster: Initialization failed', error);
-    // Create fallback client even if DB fails
     openaiClient = new OpenAIClient('');
     isInitialized = false;
   }
 }
 
-// Wait for initialization
 const initPromise = initialize();
 
-// Helper to ensure initialization before handling messages
 async function ensureInitialized() {
   await initPromise;
   return isInitialized;
 }
 
-// Listen for messages from content scripts
+// Handle keyboard commands
+chrome.commands.onCommand.addListener(async (command) => {
+  console.log('Prompt Broadcaster: Command received', command);
+
+  if (command === 'open_side_panel') {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) {
+      chrome.sidePanel.open({ tabId: tab.id });
+    }
+  }
+});
+
+// Open side panel when extension icon is clicked
+chrome.action.onClicked.addListener(async (tab) => {
+  chrome.sidePanel.open({ tabId: tab.id });
+});
+
+// Listen for messages
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('Prompt Broadcaster: Received message', message.type);
 
-  // Handle each message type with proper async handling
   (async () => {
     try {
       await ensureInitialized();
@@ -56,6 +69,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       switch (message.type) {
         case 'BROADCAST_PROMPT': {
           const result = await handleBroadcast(message.prompt, sender.tab);
+          sendResponse(result);
+          break;
+        }
+
+        case 'BROADCAST_SPLIT': {
+          const result = await handleBroadcastSplit(message.prompt, message.layout || 'horizontal');
           sendResponse(result);
           break;
         }
@@ -160,55 +179,146 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   })();
 
-  return true; // Keep channel open for async response
+  return true;
 });
 
+// Handle broadcast from ChatGPT interception (opens new tabs)
 async function handleBroadcast(originalPrompt, sourceTab) {
   console.log('Prompt Broadcaster: Broadcasting prompt', originalPrompt.substring(0, 50) + '...');
 
   if (!isEnabled) {
-    console.log('Prompt Broadcaster: Disabled, skipping');
     return { improved: originalPrompt, broadcasted: false };
   }
 
   try {
     let improvedPrompt = originalPrompt;
 
-    // Get memory context and improve prompt if possible
     if (memorySystem && isInitialized && openaiClient) {
       const memoryContext = await memorySystem.getMemoryContext();
       improvedPrompt = await openaiClient.improvePrompt(originalPrompt, memoryContext);
-
-      // Save conversation
       await memorySystem.saveConversation(originalPrompt);
 
-      // Check if we need to distill memories
       if (await memorySystem.needsDistillation()) {
         distillMemoriesInBackground();
       }
     }
 
-    // Store the improved prompt for Gemini/Claude tabs
     await chrome.storage.local.set({ pendingPrompt: improvedPrompt });
 
-    // Open Gemini and Claude tabs
-    console.log('Prompt Broadcaster: Opening Gemini and Claude tabs');
     await Promise.all([
-      chrome.tabs.create({
-        url: 'https://gemini.google.com/app',
-        active: false
-      }),
-      chrome.tabs.create({
-        url: 'https://claude.ai/new',
-        active: false
-      })
+      chrome.tabs.create({ url: 'https://gemini.google.com/app', active: false }),
+      chrome.tabs.create({ url: 'https://claude.ai/new', active: false })
     ]);
 
-    console.log('Prompt Broadcaster: Broadcast complete');
     return { improved: improvedPrompt, broadcasted: true };
   } catch (error) {
     console.error('Broadcast error:', error);
     return { improved: originalPrompt, broadcasted: false, error: error.message };
+  }
+}
+
+// Handle broadcast from side panel (opens split windows)
+async function handleBroadcastSplit(originalPrompt, layout) {
+  console.log('Prompt Broadcaster: Broadcasting to split windows', layout);
+
+  try {
+    let improvedPrompt = originalPrompt;
+
+    // Improve prompt with memory context
+    if (memorySystem && isInitialized && openaiClient) {
+      const memoryContext = await memorySystem.getMemoryContext();
+      improvedPrompt = await openaiClient.improvePrompt(originalPrompt, memoryContext);
+      await memorySystem.saveConversation(originalPrompt);
+
+      if (await memorySystem.needsDistillation()) {
+        distillMemoriesInBackground();
+      }
+    }
+
+    // Store improved prompt for content scripts
+    await chrome.storage.local.set({ pendingPrompt: improvedPrompt });
+
+    // Get screen dimensions (approximate since we can't access screen directly)
+    // Use typical screen size or get from current window
+    const currentWindow = await chrome.windows.getCurrent();
+    const screenWidth = currentWindow.width || 1920;
+    const screenHeight = currentWindow.height || 1080;
+
+    // Calculate window positions based on layout
+    const windows = calculateWindowPositions(layout, screenWidth, screenHeight);
+
+    // URLs to open
+    const urls = [
+      'https://chatgpt.com/',
+      'https://claude.ai/new',
+      'https://gemini.google.com/app'
+    ];
+
+    // Create windows
+    const windowPromises = urls.map((url, index) => {
+      const pos = windows[index];
+      return chrome.windows.create({
+        url: url,
+        type: 'normal',
+        left: pos.left,
+        top: pos.top,
+        width: pos.width,
+        height: pos.height,
+        focused: index === 0 // Focus first window
+      });
+    });
+
+    await Promise.all(windowPromises);
+
+    console.log('Prompt Broadcaster: Split windows created');
+    return { improved: improvedPrompt, broadcasted: true };
+  } catch (error) {
+    console.error('Broadcast split error:', error);
+    return { improved: originalPrompt, broadcasted: false, error: error.message };
+  }
+}
+
+// Calculate window positions for different layouts
+function calculateWindowPositions(layout, screenWidth, screenHeight) {
+  const padding = 0; // No padding between windows
+
+  switch (layout) {
+    case 'horizontal':
+      // Three windows side by side
+      const width = Math.floor(screenWidth / 3);
+      return [
+        { left: 0, top: 0, width: width, height: screenHeight },
+        { left: width, top: 0, width: width, height: screenHeight },
+        { left: width * 2, top: 0, width: width, height: screenHeight }
+      ];
+
+    case 'vertical':
+      // Three windows stacked
+      const height = Math.floor(screenHeight / 3);
+      return [
+        { left: 0, top: 0, width: screenWidth, height: height },
+        { left: 0, top: height, width: screenWidth, height: height },
+        { left: 0, top: height * 2, width: screenWidth, height: height }
+      ];
+
+    case 'grid':
+      // 2x2 grid (ChatGPT top-left, Claude top-right, Gemini bottom-left, empty bottom-right)
+      const halfWidth = Math.floor(screenWidth / 2);
+      const halfHeight = Math.floor(screenHeight / 2);
+      return [
+        { left: 0, top: 0, width: halfWidth, height: halfHeight },
+        { left: halfWidth, top: 0, width: halfWidth, height: halfHeight },
+        { left: 0, top: halfHeight, width: halfWidth, height: halfHeight }
+      ];
+
+    default:
+      // Default to horizontal
+      const defaultWidth = Math.floor(screenWidth / 3);
+      return [
+        { left: 0, top: 0, width: defaultWidth, height: screenHeight },
+        { left: defaultWidth, top: 0, width: defaultWidth, height: screenHeight },
+        { left: defaultWidth * 2, top: 0, width: defaultWidth, height: screenHeight }
+      ];
   }
 }
 

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prompt Broadcaster</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Prompt Broadcaster</h1>
+      <button id="settingsBtn" class="icon-btn" title="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 1v4M12 19v4M4.2 4.2l2.8 2.8M17 17l2.8 2.8M1 12h4M19 12h4M4.2 19.8l2.8-2.8M17 7l2.8-2.8"></path>
+        </svg>
+      </button>
+    </header>
+
+    <section class="prompt-section">
+      <div class="prompt-input-wrapper">
+        <textarea id="promptInput" placeholder="Enter your prompt here...&#10;&#10;It will be improved and sent to all AI models."></textarea>
+        <div class="char-count"><span id="charCount">0</span> chars</div>
+      </div>
+
+      <div class="actions">
+        <button id="broadcastBtn" class="btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path>
+          </svg>
+          Broadcast to All
+        </button>
+      </div>
+    </section>
+
+    <section class="status-section">
+      <div class="status-indicator">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Ready</span>
+      </div>
+      <div class="stats">
+        <span><strong id="memoryCount">0</strong> memories</span>
+        <span><strong id="convCount">0</strong> prompts</span>
+      </div>
+    </section>
+
+    <section class="preview-section hidden" id="previewSection">
+      <h2>Improved Prompt</h2>
+      <div id="improvedPrompt" class="improved-prompt"></div>
+    </section>
+
+    <section class="memory-section">
+      <h2>Memory Context</h2>
+      <div id="memoryList" class="memory-list">
+        <p class="empty">No memories yet. Start chatting to build context.</p>
+      </div>
+    </section>
+
+    <!-- Settings Panel -->
+    <div id="settingsPanel" class="settings-panel hidden">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button id="closeSettings" class="icon-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <div class="settings-content">
+        <div class="setting-group">
+          <label for="apiKey">OpenAI API Key</label>
+          <input type="password" id="apiKey" placeholder="sk-...">
+          <button id="saveApiKey" class="btn-secondary">Save Key</button>
+        </div>
+
+        <div class="setting-group">
+          <label>Window Layout</label>
+          <select id="windowLayout">
+            <option value="horizontal">Side by side (horizontal)</option>
+            <option value="vertical">Stacked (vertical)</option>
+            <option value="grid">Grid (2x2)</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <label>Memory</label>
+          <div class="memory-actions">
+            <button id="exportMemory" class="btn-secondary">Export</button>
+            <button id="importMemory" class="btn-secondary">Import</button>
+            <button id="clearMemory" class="btn-danger">Clear</button>
+          </div>
+          <input type="file" id="importFile" accept=".json" hidden>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
