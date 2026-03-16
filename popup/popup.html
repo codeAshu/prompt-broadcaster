@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prompt Broadcaster</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Prompt Broadcaster</h1>
+      <label class="toggle">
+        <input type="checkbox" id="enableToggle" checked>
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <section class="status" id="statusSection">
+      <div class="status-item">
+        <span class="label">Status:</span>
+        <span class="value" id="statusText">Checking...</span>
+      </div>
+      <div class="status-item">
+        <span class="label">Conversations:</span>
+        <span class="value" id="convCount">0</span>
+      </div>
+      <div class="status-item">
+        <span class="label">Memories:</span>
+        <span class="value" id="memCount">0</span>
+      </div>
+    </section>
+
+    <section class="settings">
+      <div class="input-group">
+        <label for="apiKey">OpenAI API Key</label>
+        <input type="password" id="apiKey" placeholder="sk-...">
+        <button id="saveKey" class="btn-primary">Save</button>
+      </div>
+    </section>
+
+    <section class="memories" id="memoriesSection">
+      <h2>Memory Summary</h2>
+      <div id="memoriesList" class="memories-list">
+        <p class="empty">No memories yet</p>
+      </div>
+    </section>
+
+    <section class="actions">
+      <button id="viewConversations" class="btn-secondary">View History</button>
+      <button id="clearMemory" class="btn-danger">Clear All</button>
+    </section>
+
+    <section class="file-actions">
+      <h2>Memory Files</h2>
+      <div class="file-buttons">
+        <button id="exportMemory" class="btn-secondary">Export JSON</button>
+        <button id="importMemory" class="btn-secondary">Import JSON</button>
+        <input type="file" id="importFile" accept=".json" hidden>
+      </div>
+    </section>
+
+    <div id="historyModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Conversation History</h2>
+          <button class="close-btn" id="closeModal">&times;</button>
+        </div>
+        <div id="historyList" class="history-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
