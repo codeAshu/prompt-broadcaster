@@ -11,3 +11,24 @@
 - Keeping documentation in sync with code changes
 
 **Action**: Before any `git push`, check if README needs to be created or updated to reflect the changes being pushed.
+
+## Chrome Extension Development
+
+### ES Modules vs importScripts
+**Pattern**: When using `"type": "module"` in manifest.json for service workers, you MUST use ES module `import` syntax, NOT `importScripts()`.
+
+**Why**: `importScripts()` is only available in classic (non-module) service workers. ES modules use `import/export`.
+
+**Wrong**:
+```javascript
+// manifest.json: "type": "module"
+importScripts('lib/memory.js'); // ERROR!
+```
+
+**Correct**:
+```javascript
+// manifest.json: "type": "module"
+import { MemorySystem } from './lib/memory.js';
+```
+
+**Action**: When writing service workers, decide upfront: classic (importScripts) or module (import). Don't mix.

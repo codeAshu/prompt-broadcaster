@@ -1,350 +1,283 @@
 // Background service worker for Prompt Broadcaster
 
-// Import dependencies
-importScripts('lib/memory.js', 'lib/openai.js');
+import { MemorySystem } from './lib/memory.js';
+import { OpenAIClient } from './lib/openai.js';
 
-let memorySystem = null;
-let openaiClient = null;
-let isEnabled = true;
-let isInitialized = false;
-
-// Initialize systems
-async function initialize() {
-  try {
-    console.log('Prompt Broadcaster: Initializing...');
-
-    memorySystem = new MemorySystem();
-    await memorySystem.init();
-    console.log('Prompt Broadcaster: IndexedDB initialized');
-
-    // Load API key from storage
-    const result = await chrome.storage.local.get(['openaiApiKey', 'isEnabled']);
-    openaiClient = new OpenAIClient(result.openaiApiKey || '');
-    isEnabled = result.isEnabled !== false; // Default to true
-    isInitialized = true;
-
-    console.log('Prompt Broadcaster: Fully initialized', {
-      hasApiKey: !!result.openaiApiKey,
-      isEnabled
-    });
-  } catch (error) {
-    console.error('Prompt Broadcaster: Initialization failed', error);
-    openaiClient = new OpenAIClient('');
-    isInitialized = false;
+class PromptBroadcaster {
+  constructor() {
+    this.memorySystem = null;
+    this.openaiClient = null;
+    this.isEnabled = true;
+    this.isInitialized = false;
+    this.initPromise = this.initialize();
   }
-}
 
-const initPromise = initialize();
+  async initialize() {
+    try {
+      console.log('PromptBroadcaster: Initializing...');
 
-async function ensureInitialized() {
-  await initPromise;
-  return isInitialized;
-}
+      this.memorySystem = new MemorySystem();
+      await this.memorySystem.init();
 
-// Handle keyboard commands
-chrome.commands.onCommand.addListener(async (command) => {
-  console.log('Prompt Broadcaster: Command received', command);
+      const stored = await chrome.storage.local.get(['openaiApiKey', 'isEnabled']);
+      this.openaiClient = new OpenAIClient(stored.openaiApiKey || '');
+      this.isEnabled = stored.isEnabled !== false;
+      this.isInitialized = true;
 
-  if (command === 'open_side_panel') {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab) {
-      chrome.sidePanel.open({ tabId: tab.id });
+      console.log('PromptBroadcaster: Ready', {
+        hasApiKey: !!stored.openaiApiKey,
+        isEnabled: this.isEnabled
+      });
+    } catch (error) {
+      console.error('PromptBroadcaster: Init failed', error);
+      this.openaiClient = new OpenAIClient('');
     }
   }
-});
 
-// Open side panel when extension icon is clicked
-chrome.action.onClicked.addListener(async (tab) => {
-  chrome.sidePanel.open({ tabId: tab.id });
-});
+  async ensureReady() {
+    await this.initPromise;
+    return this.isInitialized;
+  }
 
-// Listen for messages
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('Prompt Broadcaster: Received message', message.type);
+  async handleMessage(message, sender) {
+    await this.ensureReady();
 
-  (async () => {
+    const handlers = {
+      'BROADCAST_PROMPT': () => this.broadcast(message.prompt),
+      'BROADCAST_SPLIT': () => this.broadcastSplit(message.prompt, message.layout),
+      'GET_PENDING_PROMPT': () => this.getPendingPrompt(),
+      'CLEAR_PENDING_PROMPT': () => this.clearPendingPrompt(),
+      'SET_API_KEY': () => this.setApiKey(message.apiKey),
+      'SET_ENABLED': () => this.setEnabled(message.enabled),
+      'GET_STATUS': () => this.getStatus(),
+      'GET_MEMORIES': () => this.getMemories(),
+      'GET_CONVERSATIONS': () => this.getConversations(),
+      'CLEAR_MEMORY': () => this.clearMemory(),
+      'IMPORT_MEMORY': () => this.importMemory(message.data)
+    };
+
+    const handler = handlers[message.type];
+    if (!handler) {
+      console.warn('Unknown message:', message.type);
+      return { error: 'Unknown message type' };
+    }
+
+    return handler();
+  }
+
+  async broadcast(originalPrompt) {
+    if (!this.isEnabled) {
+      return { improved: originalPrompt, broadcasted: false };
+    }
+
     try {
-      await ensureInitialized();
+      const improvedPrompt = await this.improveAndSave(originalPrompt);
+      await chrome.storage.local.set({ pendingPrompt: improvedPrompt });
 
-      switch (message.type) {
-        case 'BROADCAST_PROMPT': {
-          const result = await handleBroadcast(message.prompt, sender.tab);
-          sendResponse(result);
-          break;
-        }
+      await Promise.all([
+        chrome.tabs.create({ url: 'https://gemini.google.com/app', active: false }),
+        chrome.tabs.create({ url: 'https://claude.ai/new', active: false })
+      ]);
 
-        case 'BROADCAST_SPLIT': {
-          const result = await handleBroadcastSplit(message.prompt, message.layout || 'horizontal');
-          sendResponse(result);
-          break;
-        }
+      return { improved: improvedPrompt, broadcasted: true };
+    } catch (error) {
+      console.error('Broadcast error:', error);
+      return { improved: originalPrompt, broadcasted: false, error: error.message };
+    }
+  }
 
-        case 'GET_PENDING_PROMPT': {
-          const result = await chrome.storage.local.get(['pendingPrompt']);
-          sendResponse({ prompt: result.pendingPrompt || null });
-          break;
-        }
+  async broadcastSplit(originalPrompt, layout = 'horizontal') {
+    try {
+      const improvedPrompt = await this.improveAndSave(originalPrompt);
+      await chrome.storage.local.set({ pendingPrompt: improvedPrompt });
 
-        case 'CLEAR_PENDING_PROMPT': {
-          await chrome.storage.local.remove(['pendingPrompt']);
-          sendResponse({ success: true });
-          break;
-        }
+      const currentWindow = await chrome.windows.getCurrent();
+      const screenWidth = currentWindow.width || 1920;
+      const screenHeight = currentWindow.height || 1080;
+      const positions = this.calculatePositions(layout, screenWidth, screenHeight);
 
-        case 'SET_API_KEY': {
-          console.log('Prompt Broadcaster: Saving API key');
-          await chrome.storage.local.set({ openaiApiKey: message.apiKey });
-          if (openaiClient) {
-            openaiClient.setApiKey(message.apiKey);
-          }
-          sendResponse({ success: true });
-          break;
-        }
+      const urls = [
+        'https://chatgpt.com/',
+        'https://claude.ai/new',
+        'https://gemini.google.com/app'
+      ];
 
-        case 'SET_ENABLED': {
-          isEnabled = message.enabled;
-          await chrome.storage.local.set({ isEnabled: message.enabled });
-          sendResponse({ success: true });
-          break;
-        }
+      await Promise.all(urls.map((url, i) =>
+        chrome.windows.create({
+          url,
+          type: 'normal',
+          ...positions[i],
+          focused: i === 0
+        })
+      ));
 
-        case 'GET_STATUS': {
-          const stored = await chrome.storage.local.get(['openaiApiKey', 'isEnabled']);
-          let convCount = 0;
-          let memCount = 0;
+      return { improved: improvedPrompt, broadcasted: true };
+    } catch (error) {
+      console.error('BroadcastSplit error:', error);
+      return { improved: originalPrompt, broadcasted: false, error: error.message };
+    }
+  }
 
-          if (memorySystem && isInitialized) {
-            try {
-              convCount = await memorySystem.getConversationCount();
-              const memories = await memorySystem.getMemories(10);
-              memCount = memories.length;
-            } catch (e) {
-              console.error('Error getting counts:', e);
-            }
-          }
+  async improveAndSave(originalPrompt) {
+    let improved = originalPrompt;
 
-          sendResponse({
-            hasApiKey: !!stored.openaiApiKey,
-            isEnabled: stored.isEnabled !== false,
-            conversationCount: convCount,
-            memoryCount: memCount,
-            initialized: isInitialized
-          });
-          break;
-        }
+    if (this.memorySystem && this.openaiClient && this.isInitialized) {
+      const context = await this.memorySystem.getMemoryContext();
+      improved = await this.openaiClient.improvePrompt(originalPrompt, context);
+      await this.memorySystem.saveConversation(originalPrompt);
 
-        case 'GET_MEMORIES': {
-          if (memorySystem && isInitialized) {
-            const memories = await memorySystem.getMemories(20);
-            sendResponse(memories);
-          } else {
-            sendResponse([]);
-          }
-          break;
-        }
+      if (await this.memorySystem.needsDistillation()) {
+        this.distillInBackground();
+      }
+    }
 
-        case 'GET_CONVERSATIONS': {
-          if (memorySystem && isInitialized) {
-            const convs = await memorySystem.getRecentConversations(50);
-            sendResponse(convs);
-          } else {
-            sendResponse([]);
-          }
-          break;
-        }
+    return improved;
+  }
 
-        case 'CLEAR_MEMORY': {
-          if (memorySystem && isInitialized) {
-            await memorySystem.clearAll();
-          }
-          sendResponse({ success: true });
-          break;
-        }
-
-        case 'IMPORT_MEMORY': {
-          if (memorySystem && isInitialized) {
-            await memorySystem.importData(message.data);
-          }
-          sendResponse({ success: true });
-          break;
-        }
-
-        default:
-          console.warn('Unknown message type:', message.type);
-          sendResponse({ error: 'Unknown message type' });
+  async distillInBackground() {
+    try {
+      const conversations = await this.memorySystem.getRecentConversations(20);
+      const summary = await this.openaiClient.distillMemories(conversations);
+      if (summary) {
+        await this.memorySystem.saveMemory(summary);
+        await this.memorySystem.clearOldConversations(50);
       }
     } catch (error) {
-      console.error('Prompt Broadcaster: Message handler error', error);
-      sendResponse({ error: error.message });
+      console.error('Distillation error:', error);
     }
-  })();
+  }
 
+  calculatePositions(layout, width, height) {
+    switch (layout) {
+      case 'vertical': {
+        const h = Math.floor(height / 3);
+        return [
+          { left: 0, top: 0, width, height: h },
+          { left: 0, top: h, width, height: h },
+          { left: 0, top: h * 2, width, height: h }
+        ];
+      }
+      case 'grid': {
+        const hw = Math.floor(width / 2);
+        const hh = Math.floor(height / 2);
+        return [
+          { left: 0, top: 0, width: hw, height: hh },
+          { left: hw, top: 0, width: hw, height: hh },
+          { left: 0, top: hh, width: hw, height: hh }
+        ];
+      }
+      default: { // horizontal
+        const w = Math.floor(width / 3);
+        return [
+          { left: 0, top: 0, width: w, height },
+          { left: w, top: 0, width: w, height },
+          { left: w * 2, top: 0, width: w, height }
+        ];
+      }
+    }
+  }
+
+  async getPendingPrompt() {
+    const result = await chrome.storage.local.get(['pendingPrompt']);
+    return { prompt: result.pendingPrompt || null };
+  }
+
+  async clearPendingPrompt() {
+    await chrome.storage.local.remove(['pendingPrompt']);
+    return { success: true };
+  }
+
+  async setApiKey(apiKey) {
+    await chrome.storage.local.set({ openaiApiKey: apiKey });
+    this.openaiClient?.setApiKey(apiKey);
+    return { success: true };
+  }
+
+  async setEnabled(enabled) {
+    this.isEnabled = enabled;
+    await chrome.storage.local.set({ isEnabled: enabled });
+    return { success: true };
+  }
+
+  async getStatus() {
+    const stored = await chrome.storage.local.get(['openaiApiKey', 'isEnabled']);
+    let convCount = 0, memCount = 0;
+
+    if (this.memorySystem && this.isInitialized) {
+      try {
+        convCount = await this.memorySystem.getConversationCount();
+        const memories = await this.memorySystem.getMemories(10);
+        memCount = memories.length;
+      } catch (e) {
+        console.error('Status error:', e);
+      }
+    }
+
+    return {
+      hasApiKey: !!stored.openaiApiKey,
+      isEnabled: stored.isEnabled !== false,
+      conversationCount: convCount,
+      memoryCount: memCount,
+      initialized: this.isInitialized
+    };
+  }
+
+  async getMemories() {
+    if (!this.memorySystem || !this.isInitialized) return [];
+    return this.memorySystem.getMemories(20);
+  }
+
+  async getConversations() {
+    if (!this.memorySystem || !this.isInitialized) return [];
+    return this.memorySystem.getRecentConversations(50);
+  }
+
+  async clearMemory() {
+    if (this.memorySystem && this.isInitialized) {
+      await this.memorySystem.clearAll();
+    }
+    return { success: true };
+  }
+
+  async importMemory(data) {
+    if (this.memorySystem && this.isInitialized) {
+      await this.memorySystem.importData(data);
+    }
+    return { success: true };
+  }
+}
+
+// Initialize
+const broadcaster = new PromptBroadcaster();
+
+// Message listener
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  broadcaster.handleMessage(message, sender)
+    .then(sendResponse)
+    .catch(error => sendResponse({ error: error.message }));
   return true;
 });
 
-// Handle broadcast from ChatGPT interception (opens new tabs)
-async function handleBroadcast(originalPrompt, sourceTab) {
-  console.log('Prompt Broadcaster: Broadcasting prompt', originalPrompt.substring(0, 50) + '...');
-
-  if (!isEnabled) {
-    return { improved: originalPrompt, broadcasted: false };
+// Commands
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'open_side_panel') {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) chrome.sidePanel.open({ tabId: tab.id });
   }
+});
 
-  try {
-    let improvedPrompt = originalPrompt;
+// Action click opens side panel
+chrome.action.onClicked.addListener((tab) => {
+  chrome.sidePanel.open({ tabId: tab.id });
+});
 
-    if (memorySystem && isInitialized && openaiClient) {
-      const memoryContext = await memorySystem.getMemoryContext();
-      improvedPrompt = await openaiClient.improvePrompt(originalPrompt, memoryContext);
-      await memorySystem.saveConversation(originalPrompt);
-
-      if (await memorySystem.needsDistillation()) {
-        distillMemoriesInBackground();
-      }
-    }
-
-    await chrome.storage.local.set({ pendingPrompt: improvedPrompt });
-
-    await Promise.all([
-      chrome.tabs.create({ url: 'https://gemini.google.com/app', active: false }),
-      chrome.tabs.create({ url: 'https://claude.ai/new', active: false })
-    ]);
-
-    return { improved: improvedPrompt, broadcasted: true };
-  } catch (error) {
-    console.error('Broadcast error:', error);
-    return { improved: originalPrompt, broadcasted: false, error: error.message };
-  }
-}
-
-// Handle broadcast from side panel (opens split windows)
-async function handleBroadcastSplit(originalPrompt, layout) {
-  console.log('Prompt Broadcaster: Broadcasting to split windows', layout);
-
-  try {
-    let improvedPrompt = originalPrompt;
-
-    // Improve prompt with memory context
-    if (memorySystem && isInitialized && openaiClient) {
-      const memoryContext = await memorySystem.getMemoryContext();
-      improvedPrompt = await openaiClient.improvePrompt(originalPrompt, memoryContext);
-      await memorySystem.saveConversation(originalPrompt);
-
-      if (await memorySystem.needsDistillation()) {
-        distillMemoriesInBackground();
-      }
-    }
-
-    // Store improved prompt for content scripts
-    await chrome.storage.local.set({ pendingPrompt: improvedPrompt });
-
-    // Get screen dimensions (approximate since we can't access screen directly)
-    // Use typical screen size or get from current window
-    const currentWindow = await chrome.windows.getCurrent();
-    const screenWidth = currentWindow.width || 1920;
-    const screenHeight = currentWindow.height || 1080;
-
-    // Calculate window positions based on layout
-    const windows = calculateWindowPositions(layout, screenWidth, screenHeight);
-
-    // URLs to open
-    const urls = [
-      'https://chatgpt.com/',
-      'https://claude.ai/new',
-      'https://gemini.google.com/app'
-    ];
-
-    // Create windows
-    const windowPromises = urls.map((url, index) => {
-      const pos = windows[index];
-      return chrome.windows.create({
-        url: url,
-        type: 'normal',
-        left: pos.left,
-        top: pos.top,
-        width: pos.width,
-        height: pos.height,
-        focused: index === 0 // Focus first window
-      });
-    });
-
-    await Promise.all(windowPromises);
-
-    console.log('Prompt Broadcaster: Split windows created');
-    return { improved: improvedPrompt, broadcasted: true };
-  } catch (error) {
-    console.error('Broadcast split error:', error);
-    return { improved: originalPrompt, broadcasted: false, error: error.message };
-  }
-}
-
-// Calculate window positions for different layouts
-function calculateWindowPositions(layout, screenWidth, screenHeight) {
-  const padding = 0; // No padding between windows
-
-  switch (layout) {
-    case 'horizontal':
-      // Three windows side by side
-      const width = Math.floor(screenWidth / 3);
-      return [
-        { left: 0, top: 0, width: width, height: screenHeight },
-        { left: width, top: 0, width: width, height: screenHeight },
-        { left: width * 2, top: 0, width: width, height: screenHeight }
-      ];
-
-    case 'vertical':
-      // Three windows stacked
-      const height = Math.floor(screenHeight / 3);
-      return [
-        { left: 0, top: 0, width: screenWidth, height: height },
-        { left: 0, top: height, width: screenWidth, height: height },
-        { left: 0, top: height * 2, width: screenWidth, height: height }
-      ];
-
-    case 'grid':
-      // 2x2 grid (ChatGPT top-left, Claude top-right, Gemini bottom-left, empty bottom-right)
-      const halfWidth = Math.floor(screenWidth / 2);
-      const halfHeight = Math.floor(screenHeight / 2);
-      return [
-        { left: 0, top: 0, width: halfWidth, height: halfHeight },
-        { left: halfWidth, top: 0, width: halfWidth, height: halfHeight },
-        { left: 0, top: halfHeight, width: halfWidth, height: halfHeight }
-      ];
-
-    default:
-      // Default to horizontal
-      const defaultWidth = Math.floor(screenWidth / 3);
-      return [
-        { left: 0, top: 0, width: defaultWidth, height: screenHeight },
-        { left: defaultWidth, top: 0, width: defaultWidth, height: screenHeight },
-        { left: defaultWidth * 2, top: 0, width: defaultWidth, height: screenHeight }
-      ];
-  }
-}
-
-async function distillMemoriesInBackground() {
-  try {
-    const conversations = await memorySystem.getRecentConversations(20);
-    const summary = await openaiClient.distillMemories(conversations);
-
-    if (summary) {
-      await memorySystem.saveMemory(summary);
-      await memorySystem.clearOldConversations(50);
-      console.log('Memory distillation complete');
-    }
-  } catch (error) {
-    console.error('Memory distillation failed:', error);
-  }
-}
-
-// Re-initialize when storage changes
+// Storage change listener
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local') {
-    if (changes.openaiApiKey && openaiClient) {
-      openaiClient.setApiKey(changes.openaiApiKey.newValue || '');
-    }
-    if (changes.isEnabled !== undefined) {
-      isEnabled = changes.isEnabled.newValue;
-    }
+  if (area !== 'local') return;
+  if (changes.openaiApiKey) {
+    broadcaster.openaiClient?.setApiKey(changes.openaiApiKey.newValue || '');
+  }
+  if (changes.isEnabled !== undefined) {
+    broadcaster.isEnabled = changes.isEnabled.newValue;
   }
 });
